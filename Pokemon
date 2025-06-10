@@ -1,0 +1,141 @@
+from tkinter import ttk
+import tkinter as tk
+from tkinter import ttk
+from PIL import Image, ImageTk
+import requests
+from io import BytesIO
+import threading
+
+def load_data():
+    url = "https://kitek.ktkv.dev/songs.json"
+    response = requests.get(url)
+    return response.json()
+
+
+def load_and_resize_image(url, max_size=(300,300)):
+    response = requests.get(url)
+    if response.status_code == 200:
+        img = Image.open(BytesIO(response.content))
+        img.thumbnail(max_size, Image.LANCZOS)
+        return ImageTk.PhotoImage(img)
+    return None
+
+def update_details(track):
+    # Асинхронная загрузка изображения
+    def load_image():
+        photo = load_and_resize_image(track['track']['album']['images'][1]['url'])
+        if photo:
+            image_label.config(image=photo)
+            image_label.image = photo
+    threading.Thread(target=load_image).start()
+
+  
+    info_text = (
+        f"Название: {track['track']['name']}\n"
+        f"Исполнитель: {track['track']['artists'][0]['name']}\n"
+        f"Альбом: {track['track']['album']['name']}\n"
+        f"Длительность: {track['track']['duration_ms'] // 1000 // 60} мин\n"
+        f"Популярность: {track['track']['popularity']}\n"
+        f"Дата релиза: {track['track']['album']['release_date']}\n"
+        f"Explicit: {'Да' if track['track']['explicit'] else 'Нет'}"
+    )
+    details_label.config(text=info_text)
+
+
+def search_and_filter():
+    term = search_var.get().lower()
+    hide_explicit = explicit_var.get()
+    global current_displayed_tracks
+    filtered = []
+    for item in data:
+        name = item['track']['name'].lower()
+        artist = item['track']['artists'][0]['name'].lower()
+        album = item['track']['album']['name'].lower()
+        if (term in name or term in artist or term in album):
+            if hide_explicit and item['track']['explicit']:
+                continue
+            filtered.append(item)
+    current_displayed_tracks = filtered
+    update_table(filtered)
+
+
+def update_table(tracks):
+    for row in tree.get_children():
+        tree.delete(row)
+    for item in tracks:
+        duration_sec = item['track']['duration_ms'] // 1000
+        tree.insert('', tk.END, values=(
+            item['track']['name'],
+            item['track']['artists'][0]['name'],
+            f"{duration_sec // 60}:{duration_sec % 60:02d}",
+            item['track']['album']['name']
+        ))
+
+
+def sort_table(event=None):
+    key = sort_var.get()
+    reverse = True
+    global current_displayed_tracks
+    if key == "По дате добавления":
+        sorted_data = sorted(current_displayed_tracks, key=lambda x: x['track']['album']['release_date'], reverse=reverse)
+    elif key == "По длительности":
+        sorted_data = sorted(current_displayed_tracks, key=lambda x: x['track']['duration_ms'], reverse=reverse)
+    elif key == "По популярности":
+        sorted_data = sorted(current_displayed_tracks, key=lambda x: x['track']['popularity'], reverse=reverse)
+    else:
+        sorted_data = current_displayed_tracks
+    current_displayed_tracks = sorted_data
+    update_table(sorted_data)
+
+
+def on_select(event):
+    selected = tree.selection()
+    if selected:
+        index = tree.index(selected[0])
+        track = current_displayed_tracks[index]
+        update_details(track)
+
+root = tk.Tk()
+root.title("Spotify Viewer")
+root.geometry("1200x700")
+
+
+search_var = tk.StringVar()
+sort_var = tk.StringVar(value="По дате добавления")
+explicit_var = tk.BooleanVar(value=False)
+
+search_entry = ttk.Entry(root, textvariable=search_var)
+search_entry.pack(fill=tk.X, padx=10, pady=5)
+search_entry.bind("<Return>", lambda e: search_and_filter())
+
+sort_combo = ttk.Combobox(root, textvariable=sort_var, values=["По дате добавления", "По длительности", "По популярности"])
+sort_combo.pack(fill=tk.X, padx=10, pady=5)
+sort_combo.bind("<<ComboboxSelected>>", lambda e: sort_table())
+
+explicit_check = ttk.Checkbutton(root, text="Скрыть explicit", variable=explicit_var, command=search_and_filter)
+explicit_check.pack(padx=10, pady=5)
+
+
+columns = ("title", "artist", "duration", "album")
+tree = ttk.Treeview(root, columns=columns, show="headings")
+for col in columns:
+    tree.heading(col, text=col.capitalize())
+    tree.column(col, width=150)
+tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+tree.bind("<<TreeviewSelect>>", on_select)
+
+details_frame = ttk.Frame(root)
+details_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=False, padx=10, pady=10)
+
+image_label = ttk.Label(details_frame)
+image_label.pack()
+
+details_label = ttk.Label(details_frame, justify=tk.LEFT)
+details_label.pack()
+
+
+data = load_data()
+current_displayed_tracks = data.copy()
+update_table(data)
+
+root.mainloop()
